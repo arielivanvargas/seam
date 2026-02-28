@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seam — Stitch your AI clips together</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --bg: #0e0e0e;
+    --surface: #161616;
+    --surface2: #1f1f1f;
+    --border: #2a2a2a;
+    --accent: #c8f060;
+    --accent2: #f0e060;
+    --text: #f0ede8;
+    --muted: #6b6b6b;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1000;
+    opacity: 0.4;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px 40px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo { font-family: 'DM Serif Display', serif; font-size: 28px; letter-spacing: -1px; }
+  .logo span { color: var(--accent); }
+  .tagline { font-size: 11px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+
+  .main { max-width: 900px; margin: 0 auto; padding: 60px 24px 40px; }
+
+  .hero { text-align: center; margin-bottom: 56px; animation: fadeUp 0.6s ease both; }
+  .hero h1 { font-family: 'DM Serif Display', serif; font-size: clamp(36px, 6vw, 64px); line-height: 1.05; letter-spacing: -2px; margin-bottom: 16px; }
+  .hero h1 em { font-style: italic; color: var(--accent); }
+  .hero p { color: var(--muted); font-size: 13px; letter-spacing: 0.05em; }
+
+  .ffmpeg-status {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 20px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    margin-bottom: 24px;
+    letter-spacing: 0.05em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .ffmpeg-status.ready { border-color: var(--accent); color: var(--accent); }
+  .ffmpeg-status.error { border-color: #ff6b6b; color: #ff9999; }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .dot.pulse { background: var(--accent); animation: pulse 1.2s ease infinite; }
+  .dot.ready { background: var(--accent); }
+  .dot.error { background: #ff6b6b; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .drop-zone {
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--surface);
+    position: relative;
+    animation: fadeUp 0.6s 0.1s ease both;
+  }
+  .drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); background: #1a1f0f; }
+  .drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .drop-icon { font-size: 40px; margin-bottom: 16px; display: block; }
+  .drop-zone h2 { font-family: 'DM Serif Display', serif; font-size: 22px; margin-bottom: 8px; font-weight: 400; }
+  .drop-zone p { font-size: 12px; color: var(--muted); }
+
+  .section-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em;
+    color: var(--muted); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .clips-section { margin-top: 32px; animation: fadeUp 0.4s ease both; }
+  .clips-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .clips-header .section-label { margin-bottom: 0; flex: 1; }
+  .total-duration { font-size: 11px; color: var(--accent); letter-spacing: 0.05em; white-space: nowrap; margin-left: 16px; }
+
+  .clips-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .clip-item {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 16px; display: flex; align-items: center; gap: 14px;
+    cursor: grab; transition: all 0.15s ease; user-select: none;
+  }
+  .clip-item:active { cursor: grabbing; }
+  .clip-item.dragging { opacity: 0.4; border-color: var(--accent); }
+  .clip-item.drag-over { border-color: var(--accent); background: #1a1f0f; transform: translateY(-2px); }
+
+  .clip-thumb {
+    width: 72px; height: 44px; border-radius: 6px;
+    background: var(--surface2); flex-shrink: 0; overflow: hidden;
+    position: relative; cursor: pointer;
+  }
+  .clip-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .clip-thumb .play-overlay {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.35); opacity: 0; transition: opacity 0.15s; font-size: 16px;
+  }
+  .clip-thumb:hover .play-overlay { opacity: 1; }
+
+  .clip-info { flex: 1; min-width: 0; }
+  .clip-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+  .clip-meta { font-size: 10px; color: var(--muted); }
+  .clip-order { font-family: 'DM Serif Display', serif; font-size: 22px; color: var(--border); min-width: 28px; text-align: center; font-style: italic; }
+  .clip-remove { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; padding: 4px; line-height: 1; transition: color 0.2s; }
+  .clip-remove:hover { color: #ff6b6b; }
+
+  .drag-hint { font-size: 10px; color: var(--muted); text-align: center; margin-top: 10px; letter-spacing: 0.05em; }
+
+  .btn-add-more {
+    background: transparent; border: 1px dashed var(--border); border-radius: var(--radius);
+    color: var(--muted); font-family: 'DM Mono', monospace; font-size: 11px;
+    padding: 10px; cursor: pointer; width: 100%; margin-top: 8px;
+    transition: all 0.2s; letter-spacing: 0.05em; position: relative;
+  }
+  .btn-add-more input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  .btn-add-more:hover { border-color: var(--accent); color: var(--accent); }
+
+  .options-section {
+    margin-top: 32px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px; animation: fadeUp 0.4s 0.05s ease both;
+  }
+
+  .options-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 16px; }
+  @media (max-width: 700px) { .options-grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 480px) { .options-grid { grid-template-columns: 1fr; } }
+
+  .option-group label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 10px; }
+
+  .option-group select {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-family: 'DM Mono', monospace;
+    font-size: 12px; padding: 8px 12px; appearance: none; cursor: pointer;
+  }
+  .option-group select:focus { outline: none; border-color: var(--accent); }
+
+  .aspect-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .aspect-pill {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); font-family: 'DM Mono', monospace; font-size: 11px;
+    padding: 8px 12px; cursor: pointer; transition: all 0.15s;
+    display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 60px;
+  }
+  .aspect-pill .pill-ratio { font-size: 13px; color: var(--text); font-weight: 500; }
+  .aspect-pill .pill-label { font-size: 9px; letter-spacing: 0.04em; color: var(--muted); }
+  .aspect-pill.active { border-color: var(--accent); background: #1a1f0f; }
+  .aspect-pill.active .pill-ratio { color: var(--accent); }
+  .aspect-pill.active .pill-label { color: var(--accent); opacity: 0.7; }
+
+  .range-wrap input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; margin-top: 4px; display: block; }
+  .range-value { font-size: 11px; color: var(--accent); margin-top: 8px; }
+
+  .merge-section { margin-top: 32px; text-align: center; animation: fadeUp 0.4s 0.1s ease both; }
+
+  .btn-merge {
+    background: var(--accent); color: #0e0e0e; border: none; border-radius: var(--radius);
+    font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500;
+    letter-spacing: 0.05em; padding: 16px 48px; cursor: pointer;
+    transition: all 0.2s ease; text-transform: uppercase;
+  }
+  .btn-merge:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 8px 32px rgba(200,240,96,0.2); }
+  .btn-merge:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .progress-section { margin-top: 24px; display: none; }
+  .progress-bar-wrap { background: var(--surface2); border-radius: 100px; height: 4px; overflow: hidden; margin-bottom: 10px; }
+  .progress-bar { height: 100%; background: var(--accent); border-radius: 100px; width: 0%; transition: width 0.4s ease; }
+  .progress-label { font-size: 11px; color: var(--muted); text-align: center; }
+
+  .result-section { margin-top: 32px; display: none; animation: fadeUp 0.4s ease both; }
+  .result-video { width: 100%; border-radius: var(--radius); border: 1px solid var(--border); background: #000; max-height: 480px; }
+
+  .result-actions { display: flex; gap: 12px; margin-top: 16px; justify-content: center; }
+
+  .btn-download {
+    background: var(--accent); color: #0e0e0e; border: none; border-radius: var(--radius);
+    font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500;
+    padding: 12px 32px; cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .btn-download:hover { background: var(--accent2); transform: translateY(-1px); }
+
+  .btn-reset {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: var(--radius); font-family: 'DM Mono', monospace; font-size: 12px;
+    padding: 12px 24px; cursor: pointer; transition: all 0.2s;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .btn-reset:hover { border-color: var(--text); color: var(--text); }
+
+  .watermark-notice { margin-top: 12px; font-size: 10px; color: var(--muted); text-align: center; letter-spacing: 0.05em; }
+
+  .error-msg {
+    background: #1f0f0f; border: 1px solid #3f1f1f; border-radius: var(--radius);
+    padding: 14px 18px; font-size: 12px; color: #ff9999; margin-top: 16px; display: none;
+  }
+
+  .preview-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.88);
+    z-index: 2000; display: none; align-items: center; justify-content: center; padding: 24px;
+  }
+  .preview-modal.open { display: flex; }
+  .preview-inner {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; max-width: 640px; width: 100%; position: relative;
+  }
+  .preview-inner video { width: 100%; border-radius: 8px; background: #000; max-height: 380px; }
+  .preview-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--muted); font-size: 24px; cursor: pointer; line-height: 1; transition: color 0.2s; }
+  .preview-close:hover { color: var(--text); }
+  .preview-name { font-size: 11px; color: var(--muted); margin-top: 10px; text-align: center; }
+
+  footer { text-align: center; padding: 40px 24px; font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; border-top: 1px solid var(--border); margin-top: 80px; }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #0e0e0e; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">seam<span>.</span></div>
+  <div class="tagline">Stitch your AI clips together</div>
+</header>
+
+<main class="main">
+  <div class="hero">
+    <h1>Turn clips into<br><em>one fluid video</em></h1>
+    <p>Drop your AI-generated clips · arrange · merge · download</p>
+  </div>
+
+  <div class="ffmpeg-status" id="ffmpegStatus">
+    <div class="dot pulse" id="ffmpegDot"></div>
+    <span id="ffmpegMsg">Loading video engine... (first load may take 20–30s)</span>
+  </div>
+
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" accept="video/*" multiple>
+    <span class="drop-icon">⬡</span>
+    <h2>Drop your clips here</h2>
+    <p>MP4, MOV, WEBM · Any resolution or format · Processed locally</p>
+  </div>
+
+  <div class="error-msg" id="errorMsg"></div>
+
+  <div class="clips-section" id="clipsSection" style="display:none">
+    <div class="clips-header">
+      <div class="section-label">Your clips — drag to reorder</div>
+      <div class="total-duration" id="totalDuration"></div>
+    </div>
+    <div class="clips-list" id="clipsList"></div>
+    <div class="drag-hint">↕ drag to reorder · click thumbnail to preview</div>
+    <button class="btn-add-more">
+      <input type="file" id="addMoreInput" accept="video/*" multiple>
+      + add more clips
+    </button>
+  </div>
+
+  <div class="options-section" id="optionsSection" style="display:none">
+    <div class="section-label">Output settings</div>
+    <div class="options-grid">
+      <div class="option-group">
+        <label>Destination format</label>
+        <div class="aspect-pills" id="aspectPills">
+          <div class="aspect-pill active" data-w="1920" data-h="1080">
+            <span class="pill-ratio">16:9</span>
+            <span class="pill-label">YouTube</span>
+          </div>
+          <div class="aspect-pill" data-w="1080" data-h="1920">
+            <span class="pill-ratio">9:16</span>
+            <span class="pill-label">TikTok/Reels</span>
+          </div>
+          <div class="aspect-pill" data-w="1080" data-h="1350">
+            <span class="pill-ratio">4:5</span>
+            <span class="pill-label">Instagram</span>
+          </div>
+          <div class="aspect-pill" data-w="1080" data-h="1080">
+            <span class="pill-ratio">1:1</span>
+            <span class="pill-label">Square</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="option-group">
+        <label>Transition type</label>
+        <select id="transitionType">
+          <option value="fade">Crossfade</option>
+          <option value="fadeblack">Fade through black</option>
+          <option value="fadewhite">Fade through white</option>
+          <option value="none">Hard cut</option>
+        </select>
+      </div>
+
+      <div class="option-group range-wrap">
+        <label>Transition duration</label>
+        <input type="range" id="transitionDuration" min="0" max="1000" value="300" step="100">
+        <div class="range-value" id="durationValue">0.3s</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="merge-section" id="mergeSection" style="display:none">
+    <button class="btn-merge" id="mergeBtn" onclick="startMerge()">Merge clips</button>
+  </div>
+
+  <div class="progress-section" id="progressSection">
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="progress-label" id="progressLabel">Preparing...</div>
+  </div>
+
+  <div class="result-section" id="resultSection">
+    <div class="section-label">Your merged video</div>
+    <video class="result-video" id="resultVideo" controls playsinline></video>
+    <div class="result-actions">
+      <a class="btn-download" id="downloadBtn" download="seam-merged.mp4">↓ Download MP4</a>
+      <button class="btn-reset" onclick="resetAll()">Start over</button>
+    </div>
+    <div class="watermark-notice">Includes a subtle Seam watermark · <a href="#" style="color:var(--accent);text-decoration:none">Remove with Pro</a></div>
+  </div>
+</main>
+
+<footer>Seam · All processing happens in your browser · Your videos never leave your device</footer>
+
+<div class="preview-modal" id="previewModal">
+  <div class="preview-inner">
+    <button class="preview-close" onclick="closePreview()">×</button>
+    <video id="previewVideo" controls playsinline autoplay></video>
+    <div class="preview-name" id="previewName"></div>
+  </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────
+let ffmpeg = null;
+let ffmpegReady = false;
+let clips = [];
+let dragSrcIndex = null;
+let selectedW = 1920, selectedH = 1080;
+
+// ─── Load FFmpeg via UMD (no ES modules needed) ───────────
+async function loadFFmpeg() {
+  try {
+    // Dynamically load the UMD bundle
+    await loadScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js');
+    await loadScript('https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js');
+
+    const { FFmpeg } = window.FFmpegWASM;
+    const { fetchFile, toBlobURL } = window.FFmpegUtil;
+
+    ffmpeg = new FFmpeg();
+
+    ffmpeg.on('progress', ({ progress }) => {
+      if (progress > 0) setProgress(Math.min(90, 10 + progress * 80), 'Processing...');
+    });
+
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+
+    ffmpegReady = true;
+    window._fetchFile = fetchFile;
+    setFFmpegStatus('ready', '✓ Video engine ready');
+
+  } catch (err) {
+    console.error('FFmpeg load error:', err);
+    setFFmpegStatus('error', 'Video engine failed to load. Try refreshing the page.');
+  }
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+function setFFmpegStatus(state, msg) {
+  const status = document.getElementById('ffmpegStatus');
+  const dot = document.getElementById('ffmpegDot');
+  document.getElementById('ffmpegMsg').textContent = msg;
+  status.className = 'ffmpeg-status ' + state;
+  dot.className = 'dot ' + (state === 'loading' ? 'pulse' : state);
+}
+
+loadFFmpeg();
+
+// ─── File handling ────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const addMoreInput = document.getElementById('addMoreInput');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  handleFiles(Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('video/')));
+});
+fileInput.addEventListener('change', e => { handleFiles(Array.from(e.target.files)); e.target.value = ''; });
+addMoreInput.addEventListener('change', e => { handleFiles(Array.from(e.target.files)); e.target.value = ''; });
+
+async function handleFiles(files) {
+  if (!files.length) return;
+  showError('');
+  for (const file of files) {
+    const id = Math.random().toString(36).slice(2);
+    const objectUrl = URL.createObjectURL(file);
+    const [duration, thumbUrl, dims] = await Promise.all([
+      getVideoDuration(objectUrl),
+      getVideoThumbnail(objectUrl),
+      getVideoDimensions(objectUrl)
+    ]);
+    clips.push({ id, file, name: file.name, duration, objectUrl, thumbUrl, w: dims.w, h: dims.h });
+  }
+  renderClips();
+  showSections();
+}
+
+function getVideoDuration(url) {
+  return new Promise(resolve => {
+    const v = document.createElement('video');
+    v.src = url;
+    v.onloadedmetadata = () => resolve(v.duration);
+    v.onerror = () => resolve(0);
+  });
+}
+
+function getVideoDimensions(url) {
+  return new Promise(resolve => {
+    const v = document.createElement('video');
+    v.src = url;
+    v.onloadedmetadata = () => resolve({ w: v.videoWidth || 1280, h: v.videoHeight || 720 });
+    v.onerror = () => resolve({ w: 1280, h: 720 });
+  });
+}
+
+function getVideoThumbnail(url) {
+  return new Promise(resolve => {
+    const v = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    v.src = url; v.muted = true;
+    v.onloadeddata = () => {
+      v.onseeked = () => {
+        canvas.width = 144; canvas.height = 88;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 144, 88);
+        const sc = Math.min(144 / v.videoWidth, 88 / v.videoHeight);
+        const sw = v.videoWidth * sc, sh = v.videoHeight * sc;
+        ctx.drawImage(v, (144-sw)/2, (88-sh)/2, sw, sh);
+        resolve(canvas.toDataURL('image/jpeg', 0.75));
+      };
+      v.currentTime = 0.1;
+    };
+    v.onerror = () => resolve(null);
+    v.load();
+  });
+}
+
+// ─── Render clips ─────────────────────────────────────────
+function renderClips() {
+  const list = document.getElementById('clipsList');
+  list.innerHTML = '';
+  const total = clips.reduce((s, c) => s + c.duration, 0);
+  const td = document.getElementById('totalDuration');
+  td.textContent = clips.length > 0 ? `${clips.length} clip${clips.length > 1 ? 's' : ''} · ${fmtDur(total)} total` : '';
+
+  clips.forEach((clip, i) => {
+    const item = document.createElement('div');
+    item.className = 'clip-item';
+    item.draggable = true;
+
+    item.innerHTML = `
+      <div class="clip-order">${i + 1}</div>
+      <div class="clip-thumb" onclick="openPreview('${clip.id}')">
+        ${clip.thumbUrl ? `<img src="${clip.thumbUrl}" alt="">` : '<span style="font-size:20px;display:flex;align-items:center;justify-content:center;width:100%;height:100%">🎬</span>'}
+        <div class="play-overlay">▶</div>
+      </div>
+      <div class="clip-info">
+        <div class="clip-name">${clip.name}</div>
+        <div class="clip-meta">${fmtDur(clip.duration)} · ${clip.w}×${clip.h}</div>
+      </div>
+      <button class="clip-remove" onclick="removeClip('${clip.id}')">×</button>
+    `;
+
+    item.addEventListener('dragstart', () => { dragSrcIndex = i; setTimeout(() => item.classList.add('dragging'), 0); });
+    item.addEventListener('dragend', () => item.classList.remove('dragging'));
+    item.addEventListener('dragover', e => { e.preventDefault(); item.classList.add('drag-over'); });
+    item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+    item.addEventListener('drop', e => {
+      e.preventDefault(); item.classList.remove('drag-over');
+      if (dragSrcIndex === null || dragSrcIndex === i) return;
+      const moved = clips.splice(dragSrcIndex, 1)[0];
+      clips.splice(i, 0, moved);
+      dragSrcIndex = null; renderClips();
+    });
+
+    list.appendChild(item);
+  });
+}
+
+function fmtDur(s) {
+  if (s < 60) return `${s.toFixed(1)}s`;
+  return `${Math.floor(s/60)}m ${Math.floor(s%60)}s`;
+}
+
+function removeClip(id) {
+  const c = clips.find(x => x.id === id);
+  if (c) URL.revokeObjectURL(c.objectUrl);
+  clips = clips.filter(x => x.id !== id);
+  renderClips();
+  if (!clips.length) hideSections();
+}
+
+function openPreview(id) {
+  const clip = clips.find(c => c.id === id);
+  if (!clip) return;
+  document.getElementById('previewVideo').src = clip.objectUrl;
+  document.getElementById('previewName').textContent = clip.name;
+  document.getElementById('previewModal').classList.add('open');
+  document.getElementById('previewVideo').play().catch(() => {});
+}
+
+function closePreview() {
+  document.getElementById('previewModal').classList.remove('open');
+  const v = document.getElementById('previewVideo');
+  v.pause(); v.src = '';
+}
+
+document.getElementById('previewModal').addEventListener('click', e => {
+  if (e.target.id === 'previewModal') closePreview();
+});
+
+// ─── Aspect ratio ─────────────────────────────────────────
+document.querySelectorAll('.aspect-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.aspect-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    selectedW = parseInt(pill.dataset.w);
+    selectedH = parseInt(pill.dataset.h);
+  });
+});
+
+function showSections() {
+  ['clipsSection','optionsSection','mergeSection'].forEach(id => document.getElementById(id).style.display = 'block');
+}
+function hideSections() {
+  ['clipsSection','optionsSection','mergeSection'].forEach(id => document.getElementById(id).style.display = 'none');
+}
+
+const slider = document.getElementById('transitionDuration');
+slider.addEventListener('input', () => {
+  const v = parseInt(slider.value);
+  document.getElementById('durationValue').textContent = v === 0 ? 'No transition' : `${(v/1000).toFixed(1)}s`;
+});
+
+// ─── Merge ────────────────────────────────────────────────
+async function startMerge() {
+  if (clips.length < 2) { showError('Add at least 2 clips to merge.'); return; }
+  if (!ffmpegReady) { showError('Video engine is still loading, please wait a moment.'); return; }
+
+  const btn = document.getElementById('mergeBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Processing...';
+  document.getElementById('progressSection').style.display = 'block';
+  document.getElementById('resultSection').style.display = 'none';
+  setProgress(0, 'Preparing files...');
+
+  try {
+    const transitionType = document.getElementById('transitionType').value;
+    const transSec = parseInt(slider.value) / 1000;
+    const fetchFile = window._fetchFile;
+
+    // Write input files
+    setProgress(5, 'Loading clips...');
+    for (let i = 0; i < clips.length; i++) {
+      const data = await fetchFile(clips[i].file);
+      const ext = clips[i].name.split('.').pop().toLowerCase() || 'mp4';
+      await ffmpeg.writeFile(`input${i}.${ext}`, data);
+    }
+
+    // Normalize each clip to target resolution
+    setProgress(15, 'Normalizing clips...');
+    for (let i = 0; i < clips.length; i++) {
+      const ext = clips[i].name.split('.').pop().toLowerCase() || 'mp4';
+      await ffmpeg.exec([
+        '-i', `input${i}.${ext}`,
+        '-vf', `scale=${selectedW}:${selectedH}:force_original_aspect_ratio=increase,crop=${selectedW}:${selectedH},setsar=1`,
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+        '-r', '30', '-y', `norm${i}.mp4`
+      ]);
+      setProgress(15 + ((i+1) / clips.length) * 25, `Normalizing ${i+1}/${clips.length}...`);
+    }
+
+    setProgress(42, 'Merging...');
+
+    if (transitionType === 'none' || transSec === 0) {
+      // Simple concat
+      const concatContent = clips.map((_, i) => `file 'norm${i}.mp4'`).join('\n');
+      await ffmpeg.writeFile('concat.txt', concatContent);
+      await ffmpeg.exec([
+        '-f', 'concat', '-safe', '0', '-i', 'concat.txt',
+        '-c', 'copy', '-y', 'merged.mp4'
+      ]);
+    } else {
+      // xfade transitions
+      let cumulative = 0;
+      const offsets = [];
+      for (let i = 0; i < clips.length - 1; i++) {
+        cumulative += clips[i].duration - transSec;
+        offsets.push(cumulative.toFixed(3));
+      }
+
+      let vFilter = '';
+      let aFilter = '';
+      for (let i = 0; i < clips.length - 1; i++) {
+        const inV = i === 0 ? '[0:v]' : `[v${i-1}]`;
+        const inA = i === 0 ? '[0:a]' : `[a${i-1}]`;
+        const outV = i === clips.length - 2 ? '[vout]' : `[v${i}]`;
+        const outA = i === clips.length - 2 ? '[aout]' : `[a${i}]`;
+        vFilter += `${inV}[${i+1}:v]xfade=transition=${transitionType}:duration=${transSec}:offset=${offsets[i]}${outV};`;
+        aFilter += `${inA}[${i+1}:a]acrossfade=d=${transSec}${outA};`;
+      }
+
+      const filterComplex = (vFilter + aFilter).replace(/;$/, '');
+      const inputArgs = clips.flatMap((_, i) => ['-i', `norm${i}.mp4`]);
+
+      await ffmpeg.exec([
+        ...inputArgs,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]', '-map', '[aout]',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k', '-y', 'merged.mp4'
+      ]);
+    }
+
+    // Add watermark
+    setProgress(88, 'Adding watermark...');
+    const fontSize = Math.floor(selectedW * 0.018);
+    const pad = Math.floor(selectedW * 0.022);
+    await ffmpeg.exec([
+      '-i', 'merged.mp4',
+      '-vf', `drawtext=text='seam.':fontsize=${fontSize}:fontcolor=white@0.5:x=w-tw-${pad}:y=h-th-${pad}`,
+      '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+      '-c:a', 'copy', '-y', 'final.mp4'
+    ]);
+
+    setProgress(96, 'Preparing download...');
+    const data = await ffmpeg.readFile('final.mp4');
+    const blob = new Blob([data.buffer], { type: 'video/mp4' });
+    showResult(blob);
+
+    // Cleanup
+    for (let i = 0; i < clips.length; i++) {
+      const ext = clips[i].name.split('.').pop().toLowerCase() || 'mp4';
+      try { await ffmpeg.deleteFile(`input${i}.${ext}`); } catch(e) {}
+      try { await ffmpeg.deleteFile(`norm${i}.mp4`); } catch(e) {}
+    }
+    try { await ffmpeg.deleteFile('merged.mp4'); } catch(e) {}
+    try { await ffmpeg.deleteFile('final.mp4'); } catch(e) {}
+    try { await ffmpeg.deleteFile('concat.txt'); } catch(e) {}
+
+  } catch (err) {
+    showError('Processing failed: ' + err.message);
+    console.error(err);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Merge clips';
+  document.getElementById('progressSection').style.display = 'none';
+}
+
+function showResult(blob) {
+  const url = URL.createObjectURL(blob);
+  document.getElementById('resultVideo').src = url;
+  const dl = document.getElementById('downloadBtn');
+  dl.href = url; dl.download = 'seam-merged.mp4';
+  document.getElementById('resultSection').style.display = 'block';
+  document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setProgress(100, 'Done!');
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = label;
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg; el.style.display = msg ? 'block' : 'none';
+}
+
+function resetAll() {
+  clips.forEach(c => URL.revokeObjectURL(c.objectUrl));
+  clips = []; renderClips(); hideSections();
+  document.getElementById('resultSection').style.display = 'none';
+  document.getElementById('progressSection').style.display = 'none';
+  document.getElementById('resultVideo').src = '';
+  fileInput.value = ''; showError('');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+</script>
+</body>
+</html>
